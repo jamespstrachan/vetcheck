@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>Rotation Data Viewer</title>
+  <title>Vet Rotations Day 1 Competence Checker</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Load the xlsx library for spreadsheet parsing -->
@@ -34,9 +34,6 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Timetable Upload Button -->
             <div>
-                <label for="timetable-upload-btn" class="block text-sm font-medium text-gray-700 mb-2">
-                    1. Upload Timetable
-                </label>
                 <input type="file" id="timetable-file-input" class="hidden-file-input" accept=".xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
                 <button id="timetable-upload-btn" class="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
                     Upload Timetable (.xlsx)
@@ -45,9 +42,6 @@
             </div>
             <!-- D1Cs Upload Button -->
             <div>
-                <label for="d1c-upload-btn" class="block text-sm font-medium text-gray-700 mb-2">
-                    2. Upload Rotation D1Cs
-                </label>
                 <input type="file" id="d1c-file-input" class="hidden-file-input" accept=".xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
                 <button id="d1c-upload-btn" class="w-full bg-teal-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 transition-colors">
                     Upload Rotation D1Cs (.xlsx)
@@ -72,6 +66,7 @@
     // --- Global State ---
     let parsedRotations = [];
     let parsedTimetable = { headers: [], data: [] };
+    let rotationD1CsMap = new Map();
 
     // --- DOM Element References ---
     const d1cFileInput = document.getElementById('d1c-file-input');
@@ -106,7 +101,7 @@
     });
 
     /**
-     * Handles the D1Cs file processing, reading, and table generation.
+     * Handles the D1Cs file processing, creating a lookup map based on rotation codes.
      * @param {File} file The D1Cs spreadsheet file.
      */
     function handleD1CsFile(file) {
@@ -126,23 +121,29 @@
           const headerRow = json[0];
           const codeRow = json[1];
           parsedRotations = [];
+          rotationD1CsMap.clear();
 
-          // Iterate through columns, IGNORING the first column (i=1)
           for (let i = 1; i < headerRow.length; i++) {
             if (headerRow[i]) {
-              const rotationName = headerRow[i];
-              const rotationCode = codeRow[i] || 'N/A';
+              const rotationName = headerRow[i].toString().trim();
+              const rotationCode = (codeRow[i] || '').toString().trim();
               const d1cs = [];
               for (let j = 2; j < json.length; j++) {
                 if (json[j] && json[j][i] !== null && json[j][i] !== '') {
                   d1cs.push(json[j][i]);
                 }
               }
+              const d1csString = d1cs.join(', ') || 'None';
               parsedRotations.push({
                 name: rotationName,
                 code: rotationCode,
-                d1cs: d1cs.join(', ') || 'None'
+                d1cs: d1csString
               });
+
+              if (rotationCode) {
+                  const normalizedCodeKey = rotationCode.toLowerCase();
+                  rotationD1CsMap.set(normalizedCodeKey, d1csString);
+              }
             }
           }
 
@@ -150,6 +151,8 @@
 
           displayRotationsTable(parsedRotations);
           displayMessage('Successfully processed Rotation D1Cs file.', 'success');
+
+          linkDataAndRedrawTimetable();
 
         } catch (error) {
             console.error("Error processing D1Cs file:", error);
@@ -239,14 +242,13 @@
                     });
                 });
 
-                // --- Post-processing to filter empty columns and set common styling ---
                 const finalHeaders = [];
                 const finalGroupData = groupRows.map(g => ({ group: g.group, rotations: [] }));
 
                 for (let i = 0; i < headers.length; i++) {
                     const isColumnEmpty = groupRows.every(g => g.rotations[i].value === '');
                     if (isColumnEmpty) {
-                        continue; // Skip this column
+                        continue;
                     }
 
                     finalHeaders.push(headers[i]);
@@ -261,9 +263,9 @@
                     });
                 }
 
-
                 parsedTimetable = { headers: finalHeaders, data: finalGroupData };
-                displayTimetable(parsedTimetable.headers, parsedTimetable.data);
+
+                linkDataAndRedrawTimetable();
                 displayMessage('Successfully processed Timetable file.', 'success');
 
             } catch (error) {
@@ -273,6 +275,66 @@
         };
         reader.onerror = () => displayMessage('Error reading the Timetable file.', 'error');
         reader.readAsArrayBuffer(file);
+    }
+
+    /**
+     * Normalizes a rotation value from the timetable for robust matching.
+     * @param {string} name The rotation name to normalize.
+     * @returns {string} The normalized base name.
+     */
+    function getBaseRotationName(name) {
+        if (typeof name !== 'string' || !name) {
+            return '';
+        }
+        return name.trim()
+                   .toLowerCase()
+                   .replace(/[\s-–_]*\(?\d+\)?$/, '')
+                   .trim();
+    }
+
+    /**
+     * Central function to link D1Cs to the timetable and redraw.
+     */
+    function linkDataAndRedrawTimetable() {
+        if (parsedRotations.length === 0 || parsedTimetable.data.length === 0) {
+            if (parsedTimetable.data.length > 0) {
+                displayTimetable(parsedTimetable.headers, parsedTimetable.data);
+            }
+            return;
+        }
+
+        parsedTimetable.data.forEach(groupData => {
+            groupData.rotations.forEach(rotation => {
+                if (rotation.value) {
+                    const normalizedValue = getBaseRotationName(rotation.value.toString());
+                    const d1cs = rotationD1CsMap.get(normalizedValue);
+                    rotation.d1cs = d1cs || null;
+                }
+            });
+        });
+
+        parsedTimetable.data.forEach(groupData => {
+            const seenD1CsInFuture = new Set();
+            for (let i = groupData.rotations.length - 1; i >= 0; i--) {
+                const rotation = groupData.rotations[i];
+                const finalD1CsForThisRotation = [];
+
+                if (rotation.d1cs && rotation.d1cs !== 'None') {
+                    const currentD1CsList = rotation.d1cs.split(',').map(d => d.trim());
+                    currentD1CsList.forEach(d1c => {
+                        if (d1c && !seenD1CsInFuture.has(d1c)) {
+                            finalD1CsForThisRotation.push(d1c);
+                        }
+                    });
+                    currentD1CsList.forEach(d1c => {
+                        if (d1c) seenD1CsInFuture.add(d1c);
+                    });
+                }
+                rotation.finalD1Cs = finalD1CsForThisRotation.join(', ');
+            }
+        });
+
+        displayTimetable(parsedTimetable.headers, parsedTimetable.data);
     }
 
     function excelDateToJSDate(serial) {
@@ -323,8 +385,24 @@
                             <tr>
                                 <td class="sticky left-0 bg-white z-10 px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHTML(groupData.group)}</td>
                                 ${groupData.rotations.map(rotation => {
-                                    const isCommonClass = rotation.isCommon ? 'bg-gray-200 italic' : '';
-                                    return `<td class="px-6 py-4 whitespace-nowrap text-sm text-center text-gray-500 ${isCommonClass}">${escapeHTML(rotation.value)}</td>`;
+                                    let cellClass = 'px-6 py-4 whitespace-nowrap text-sm text-center text-gray-500';
+                                    let cellContent = escapeHTML(rotation.value);
+
+                                    if (rotation.isCommon) {
+                                        cellClass += ' bg-gray-200 italic';
+                                    }
+
+                                    if (rotation.finalD1Cs) {
+                                        // Apply red background highlight for last-chance D1Cs
+                                        cellClass = 'px-6 py-4 whitespace-nowrap text-sm text-center text-gray-500 bg-red-50';
+                                        if (rotation.isCommon) cellClass += ' italic';
+
+                                        // Format the D1C text to be red and bold
+                                        const spanClass = 'text-xs font-mono text-red-700 font-semibold';
+                                        cellContent += `<br><span class="${spanClass}">${escapeHTML(rotation.finalD1Cs)}</span>`;
+                                    }
+
+                                    return `<td class="${cellClass}">${cellContent}</td>`;
                                 }).join('')}
                             </tr>
                         `).join('')}
@@ -383,7 +461,6 @@
         `;
         messageArea.appendChild(messageDiv);
 
-        // Message disappears after 5 seconds
         setTimeout(() => {
             messageDiv.style.opacity = '0';
             setTimeout(() => messageArea.removeChild(messageDiv), 300);
